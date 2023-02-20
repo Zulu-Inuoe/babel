@@ -115,7 +115,8 @@ are less than UNICODE-CHAR-CODE-LIMIT."
    :octet-seq-type (simple-array (unsigned-byte 8) (*))
    :code-point-seq-setter string-set
    :code-point-seq-getter string-get
-   :code-point-seq-type simple-unicode-string))
+   :code-point-seq-type simple-unicode-string
+   :src-args (i)))
 
 #+sbcl
 (defparameter *simple-base-string-vector-mappings*
@@ -127,7 +128,8 @@ are less than UNICODE-CHAR-CODE-LIMIT."
    :octet-seq-type (simple-array (unsigned-byte 8) (*))
    :code-point-seq-setter string-set
    :code-point-seq-getter string-get
-   :code-point-seq-type simple-base-string))
+   :code-point-seq-type simple-base-string
+   :src-args (i)))
 
 ;;; Do we want a more a specific error condition here?
 (defun check-vector-bounds (vector start end)
@@ -233,6 +235,20 @@ shouldn't attempt to modify V."
         (let ((string (make-string size :element-type 'unicode-char)))
           (funcall (decoder mapping) vector start new-end string 0)
           string)))))
+
+(defun octets-to-string-new (vector &key (start 0) end
+                              (errorp (not *suppress-character-coding-errors*))
+                              (encoding *default-character-encoding*))
+  (let* ((*suppress-character-coding-errors* (not errorp))
+         (mapping (lookup-mapping *string-vector-mappings* encoding))
+         (string (make-array 128 :element-type 'unicode-char :adjustable t :fill-pointer 0))
+         (decoder-new (decoder-new mapping)))
+    (loop :for i :from (or start 0) :below (or end (length vector))
+          :for c := (funcall decoder-new vector i)
+          :while c
+          :do (vector-push-extend (code-char c) string)
+          :finally (return (coerce string 'simple-string)))))
+        
 
 (defun bom-vector (encoding use-bom)
   (check-type use-bom (member :default t nil))

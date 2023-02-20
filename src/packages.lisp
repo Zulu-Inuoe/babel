@@ -52,6 +52,7 @@
    #:decoder
    #:octet-counter
    #:code-point-counter
+   #:decoder-new
    #:lookup-mapping
    #:with-simple-vector
    #:with-checked-simple-vector
