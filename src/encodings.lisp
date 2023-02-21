@@ -449,6 +449,56 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
                (declare (type ub8 ,',octet))
                (block ,',encoding ,@',body))))))))
 
+(defmacro define-multibyte-decoder (encoding () &body body)
+  (with-unique-names (s-getter s-type d-setter d-type
+                      src start end dest d-start i di
+                      src-args)
+    `(progn
+      (define-decoder ,encoding (,s-getter ,s-type ,d-setter ,d-type)
+        `(named-lambda ,',(symbolicate encoding '#:-multibyte-decoder)
+             (,',src ,',start ,',end ,',dest ,',d-start)
+           (declare (type ,,s-type ,',src)
+                    (type ,,d-type ,',dest)
+                    (fixnum ,',start ,',end ,',d-start))
+           (loop with ,',i fixnum = ,',start
+                 for ,',di fixnum from ,',d-start do
+                 (when (<= ,',end ,',i) (loop-finish))
+                 (print ,',i)
+                 (,,d-setter
+                  (macrolet
+                      ;; this should probably be a function...
+                      ((handle-error (&optional (c ''character-decoding-error))
+                        (declare (ignore c))
+                        `(error "TBD")
+                        #++
+                         `(decoding-error
+                           (vector ,',',octet) ,',',encoding ,',',src ,',',i
+                           +default-substitution-code-point+ ,c))
+                       (consume-octet (&optional errorp)
+                        (if errorp
+                          `(or (and (< ,',',i ,',',end) (prog1 (,',,s-getter ,',',src ,',',i) (incf ,',',i))) (error "EOF TBD"))
+                          `(and (< ,',',i ,',',end)     (prog1 (,',,s-getter ,',',src ,',',i) (incf ,',',i))))))
+                      (block ,',encoding ,@',body))
+                  ,',dest ,',di)
+                 finally (return (the fixnum (-  ,',di ,',d-start))))))
+      (define-decoder-new ,encoding (,s-getter ,s-type ,src-args)
+        `(named-lambda ,',(symbolicate encoding '#:-multibyte-decoder-new)
+           (,',src ,@,src-args)
+           (declare (type ,,s-type ,',src))
+           (macrolet
+              ;; this should probably be a function...
+              ((handle-error (&optional (c ''character-decoding-error))
+                  (declare (ignore c))
+                 `(error "TBD")
+                 #++`(decoding-error
+                   (vector ,',',octet) ,',',encoding ,',',src nil #|todo expecting pos|# #++,',',i
+                   +default-substitution-code-point+ ,c))
+                (consume-octet (&optional errorp)
+                  (if errorp
+                    `(or (,',,s-getter ,',',src ,',@,src-args) (error "EOF TBD"))
+                    `(,',,s-getter ,',',src ,',@,src-args))))
+             (block ,',encoding ,@',body)))))))
+
 ;;;; Error Conditions
 ;;;
 ;;; For now, we don't define any actual restarts.  The only mechanism

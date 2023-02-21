@@ -248,7 +248,10 @@ shouldn't attempt to modify V."
           :while c
           :do (vector-push-extend (code-char c) string)
           :finally (return (coerce string 'simple-string)))))
-        
+
+(defun new-test ()
+  (values (babel::octets-to-string-new (babel:string-to-octets "Hello, world!" :encoding :utf-8) :encoding :utf-8)
+          (babel::octets-to-string (babel:string-to-octets "Hello, world!" :encoding :utf-8) :encoding :utf-8)))
 
 (defun bom-vector (encoding use-bom)
   (check-type use-bom (member :default t nil))

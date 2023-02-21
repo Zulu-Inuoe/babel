@@ -162,101 +162,75 @@ in 2 to 4 bytes."
                 (incf di 4))))
            finally (return (the fixnum (- di d-start))))))
 
-(define-decoder :utf-8 (getter src-type setter dest-type)
-  `(named-lambda utf-8-decoder (src start end dest d-start)
-     (declare (type ,src-type src)
-              (type ,dest-type dest)
-              (fixnum start end d-start))
-     (let ((u2 0) (u3 0) (u4 0) (u5 0) (u6 0))
-       (declare (type ub8 u2 u3 u4 u5 u6))
-       (loop for di fixnum from d-start
-             for i fixnum from start below end
-             for u1 of-type ub8 = (,getter src i) do
-             ;; Note: CONSUME-OCTET doesn't check if I is being
-             ;; incremented past END.  We're assuming that END has
-             ;; been calculated with the CODE-POINT-POINTER above that
-             ;; checks this.
-             (macrolet
-                 ((consume-octet ()
-                    `(let ((next-i (incf i)))
-                       (if (= next-i end)
-                           ;; FIXME: data for this error is incomplete.
-                           ;; and signalling this error twice
-                           (return-from setter-block
-                             (decoding-error nil :utf-8 src i +repl+
-                                             'end-of-input-in-character))
-                           (,',getter src next-i))))
-                  (handle-error (n &optional (c 'character-decoding-error))
-                    `(decoding-error
-                      (vector ,@(subseq '(u1 u2 u3 u4 u5 u6) 0 n))
-                      :utf-8 src (1+ (- i ,n)) +repl+ ',c))
-                  (handle-error-if-icb (var n)
-                    `(when (not (< #x7f ,var #xc0))
-                       (decf i)
-                       (return-from setter-block
-                         (handle-error ,n invalid-utf8-continuation-byte)))))
-               (,setter
-                (block setter-block
-                  (cond
-                    ((< u1 #x80) u1)    ; 1 octet
-                    ((< u1 #xc0)
-                     (handle-error 1 invalid-utf8-starter-byte))
-                    (t
-                     (setq u2 (consume-octet))
-                     (handle-error-if-icb u2 1)
-                     (cond
-                       ((< u1 #xc2)
-                        (handle-error 2 overlong-utf8-sequence))
-                       ((< u1 #xe0)     ; 2 octets
-                        (logior (f-ash (f-logand #x1f u1) 6)
-                                (f-logxor u2 #x80)))
-                       (t
-                        (setq u3 (consume-octet))
-                        (handle-error-if-icb u3 2)
-                        (cond
-                          ((and (= u1 #xe0) (< u2 #xa0))
-                           (handle-error 3 overlong-utf8-sequence))
-                          ((< u1 #xf0)  ; 3 octets
-                           (let ((start (f-logior (f-ash (f-logand u1 #x0f) 12)
-                                                  (f-ash (f-logand u2 #x3f) 6))))
-                             (if (<= #xd800 start #xdfc0)
-                                 (handle-error 3 character-out-of-range)
-                                 (logior start (f-logand u3 #x3f)))))
-                          (t            ; 4 octets
-                           (setq u4 (consume-octet))
-                           (handle-error-if-icb u4 3)
-                           (cond
-                             ((and (= u1 #xf0) (< u2 #x90))
-                              (handle-error 4 overlong-utf8-sequence))
-                             ((< u1 #xf8)
-                              (if (or (> u1 #xf4) (and (= u1 #xf4) (> u2 #x8f)))
-                                  (handle-error 4 character-out-of-range)
-                                  (f-logior (f-ash (f-logand u1 7) 18)
-                                            (f-ash (f-logxor u2 #x80) 12)
-                                            (f-ash (f-logxor u3 #x80) 6)
-                                            (f-logxor u4 #x80))))
-                             ;; from here on we'll be getting either
-                             ;; invalid continuation bytes or overlong
-                             ;; 5-byte or 6-byte sequences.
-                             (t
-                              (setq u5 (consume-octet))
-                              (handle-error-if-icb u5 4)
-                              (cond
-                                ((and (= u1 #xf8) (< u2 #x88))
-                                 (handle-error 5 overlong-utf8-sequence))
-                                ((< u1 #xfc)
-                                 (handle-error 5 character-out-of-range))
-                                (t
-                                 (setq u6 (consume-octet))
-                                 (handle-error-if-icb u6 5)
-                                 (cond
-                                   ((and (= u1 #xfc) (< u2 #x84))
-                                    (handle-error 6 overlong-utf8-sequence))
-                                   (t
-                                    (handle-error 6 character-out-of-range)
-                                    )))))))))))))
-                dest di))
-             finally (return (the fixnum (- di d-start)))))))
+(define-multibyte-decoder :utf-8 ()
+   (let ((u1 (or (consume-octet) (return-from :utf-8 nil)))
+         (u2 0) (u3 0) (u4 0) (u5 0) (u6 0))
+     (declare (type ub8 u1 u2 u3 u4 u5 u6))
+     (macrolet ((handle-error (n &optional (c 'character-decoding-error))
+                  (declare (ignore n c))
+                  `(error "TBD")
+                  #++`(decoding-error
+                    (vector ,@(subseq '(u1 u2 u3 u4 u5 u6) 0 n))
+                    :utf-8 src (1+ (- i ,n)) +repl+ ',c))
+                (handle-error-if-icb (var n)
+                 `(when (not (< #x7f ,var #xc0))
+                    (handle-error ,n invalid-utf8-continuation-byte))))
+       (cond
+         ((< u1 #x80) u1)    ; 1 octet
+         ((< u1 #xc0) (handle-error 1 invalid-utf8-starter-byte))
+         (t
+          (setf u2 (consume-octet t))
+          (handle-error-if-icb u2 1)
+          (cond
+            ((< u1 #xc2)
+             (handle-error 2 overlong-utf8-sequence))
+            ((< u1 #xe0)     ; 2 octets
+             (logior (f-ash (f-logand #x1f u1) 6)
+                     (f-logxor u2 #x80)))
+            (t
+             (setf u3 (consume-octet t))
+             (handle-error-if-icb u3 2)
+             (cond
+               ((and (= u1 #xe0) (< u2 #xa0))
+                (handle-error 3 overlong-utf8-sequence))
+               ((< u1 #xf0)  ; 3 octets
+                (let ((start (f-logior (f-ash (f-logand u1 #x0f) 12)
+                                       (f-ash (f-logand u2 #x3f) 6))))
+                  (if (<= #xd800 start #xdfc0)
+                      (handle-error 3 character-out-of-range)
+                      (logior start (f-logand u3 #x3f)))))
+               (t            ; 4 octets
+                (setf u4 (consume-octet t))
+                (handle-error-if-icb u4 3)
+                (cond
+                  ((and (= u1 #xf0) (< u2 #x90))
+                   (handle-error 4 overlong-utf8-sequence))
+                  ((< u1 #xf8)
+                   (if (or (> u1 #xf4) (and (= u1 #xf4) (> u2 #x8f)))
+                       (handle-error 4 character-out-of-range)
+                       (f-logior (f-ash (f-logand u1 7) 18)
+                                 (f-ash (f-logxor u2 #x80) 12)
+                                 (f-ash (f-logxor u3 #x80) 6)
+                                 (f-logxor u4 #x80))))
+                  ;; from here on we'll be getting either
+                  ;; invalid continuation bytes or overlong
+                  ;; 5-byte or 6-byte sequences.
+                  (t
+                   (setf u5 (consume-octet t))
+                   (handle-error-if-icb u5 4)
+                   (cond
+                     ((and (= u1 #xf8) (< u2 #x88))
+                      (handle-error 5 overlong-utf8-sequence))
+                     ((< u1 #xfc)
+                      (handle-error 5 character-out-of-range))
+                     (t
+                      (setf u6 (consume-octet t))
+                      (handle-error-if-icb u6 5)
+                      (cond
+                        ((and (= u1 #xfc) (< u2 #x84))
+                         (handle-error 6 overlong-utf8-sequence))
+                        (t
+                         (handle-error 6 character-out-of-range))))))))))))))))
 
 ;;;; UTF-8B
 
