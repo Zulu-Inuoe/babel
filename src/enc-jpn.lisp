@@ -572,58 +572,36 @@ in 2 to 3 bytes."
            finally (return (the fixnum (- di d-start))))))
 
 
-(define-decoder :eucjp (getter src-type setter dest-type)
-  `(named-lambda eucjp-decoder (src start end dest d-start)
-     (declare (type ,src-type src)
-              (type ,dest-type dest)
-              (fixnum start end d-start))
-     (let ((u2 0))
-       (declare (type ub8 u2))
-       (loop for di fixnum from d-start
-             for i fixnum from start below end
-             for u1 of-type ub8 = (,getter src i) do
-               ;; Note: CONSUME-OCTET doesn't check if I is being
-               ;; incremented past END.  We're assuming that END has
-               ;; been calculated with the CODE-POINT-POINTER above that
-               ;; checks this.
-               (macrolet
-                   ((consume-octet ()
-                      `(let ((next-i (incf i)))
-                         (if (= next-i end)
-                             ;; FIXME: data for this error is incomplete.
-                             ;; and signalling this error twice
-                             (return-from setter-block
-                               (decoding-error nil :eucjp src i +repl+
-                                               'end-of-input-in-character))
-                             (,',getter src next-i))))
-                    (handle-error (n &optional (c 'character-decoding-error))
-                      `(decoding-error
-                        (vector ,@(subseq '(u1 u2) 0 n))
-                        :eucjp src (1+ (- i ,n)) +repl+ ',c))
-                    (handle-error-if-icb (var n)
-                      `(when (not (< #x7f ,var #xc0))
-                         (decf i)
-                         (return-from setter-block
-                           (handle-error ,n invalid-utf8-continuation-byte)))))
-                 (,setter
-                  (block setter-block
-                    (cond
-                      ;; 3 octets
-                      ((= u1 #x8f)
-                       (setq u2 (consume-octet))
-                       (eucjp-to-ucs (logior #x8f0000
-                                             (f-ash u2 8)
-                                             (consume-octet))))
-                      ;; 2 octets
-                      ((or (= u1 #x8e)
-                           (< #xa0 u1 #xff))
-                       (eucjp-to-ucs (logior (f-ash u1 8)
-                                             (consume-octet))))
-                      ;; 1 octet
-                      (t
-                       (eucjp-to-ucs u1))))
-                  dest di))
-         finally (return (the fixnum (- di d-start)))))))
+(define-multibyte-decoder :eucjp ()
+  (let ((u1 (consume-octet))
+        (u2 0))
+    (declare (type ub8 u1 u2))
+    (macrolet
+        ((handle-error (n &optional (c 'character-decoding-error))
+          (declare (ignore n c))
+          `(error "TODO")
+          #++
+           `(decoding-error
+             (vector ,@(subseq '(u1 u2) 0 n))
+             :eucjp src (1+ (- i ,n)) +repl+ ',c))
+         (handle-error-if-icb (var n)
+           `(when (not (< #x7f ,var #xc0))
+             (handle-error ,n invalid-utf8-continuation-byte))))
+     (cond
+       ;; 3 octets
+       ((= u1 #x8f)
+        (setf u2 (consume-octet t))
+        (eucjp-to-ucs (logior #x8f0000
+                              (f-ash u2 8)
+                              (consume-octet t))))
+       ;; 2 octets
+       ((or (= u1 #x8e)
+            (< #xa0 u1 #xff))
+        (eucjp-to-ucs (logior (f-ash u1 8)
+                              (consume-octet t))))
+       ;; 1 octet
+       (t
+        (eucjp-to-ucs u1))))))
 
 ;;;; CP932
 
@@ -717,51 +695,28 @@ in 2 bytes."
                    ))
            finally (return (the fixnum (- di d-start))))))
 
-
-(define-decoder :cp932 (getter src-type setter dest-type)
-  `(named-lambda cp932-decoder (src start end dest d-start)
-     (declare (type ,src-type src)
-              (type ,dest-type dest)
-              (fixnum start end d-start))
-     (let ((u2 0))
-       (declare (type ub8 u2))
-       (loop for di fixnum from d-start
-             for i fixnum from start below end
-             for u1 of-type ub8 = (,getter src i) do
-               ;; Note: CONSUME-OCTET doesn't check if I is being
-               ;; incremented past END.  We're assuming that END has
-               ;; been calculated with the CODE-POINT-POINTER above that
-               ;; checks this.
-               (macrolet
-                   ((consume-octet ()
-                      `(let ((next-i (incf i)))
-                         (if (= next-i end)
-                             ;; FIXME: data for this error is incomplete.
-                             ;; and signalling this error twice
-                             (return-from setter-block
-                               (decoding-error nil :cp932 src i +repl+
-                                               'end-of-input-in-character))
-                             (,',getter src next-i))))
-                    (handle-error (n &optional (c 'character-decoding-error))
-                      `(decoding-error
-                        (vector ,@(subseq '(u1 u2) 0 n))
-                        :cp932 src (1+ (- i ,n)) +repl+ ',c))
-                    (handle-error-if-icb (var n)
-                      `(when (not (< #x7f ,var #xc0))
-                         (decf i)
-                         (return-from setter-block
-                           (handle-error ,n invalid-utf8-continuation-byte)))))
-                 (,setter
-                  (block setter-block
-                    (cond
-                      ;; 2 octets
-                      ((or (<= #x81 u1 #x9f)
-                           (<= #xe0 u1 #xfc))
-                       (setq u2 (consume-octet))
-                       (cp932-to-ucs (logior (f-ash u1 8)
-                                             u2)))
-                      ;; 1 octet
-                      (t
-                       (cp932-to-ucs u1))))
-                  dest di))
-         finally (return (the fixnum (- di d-start)))))))
+(define-multibyte-decoder :cp932 ()
+  (let ((u1 (consume-octet))
+        (u2 0))
+    (declare (type ub8 u1 u2))
+    (macrolet
+        ((handle-error (n &optional (c 'character-decoding-error))
+          (declare (ignore n c))
+          `(error "TODO")
+          #++
+           `(decoding-error
+             (vector ,@(subseq '(u1 u2) 0 n))
+             :cp932 src (1+ (- i ,n)) +repl+ ',c))
+         (handle-error-if-icb (var n)
+           `(when (not (< #x7f ,var #xc0))
+              (handle-error ,n invalid-utf8-continuation-byte))))
+      (cond
+        ;; 2 octets
+        ((or (<= #x81 u1 #x9f)
+             (<= #xe0 u1 #xfc))
+         (setf u2 (consume-octet t))
+         (cp932-to-ucs (logior (f-ash u1 8)
+                               u2)))
+        ;; 1 octet
+        (t
+         (cp932-to-ucs u1))))))

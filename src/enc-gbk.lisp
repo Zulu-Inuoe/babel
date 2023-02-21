@@ -131,54 +131,43 @@ Chinese characters, used in the People's Republic of China."
                          (incf noctets 2)))))
                finally (return (the fixnum (- noctets d-start))))))))
 
-(define-decoder :gbk (getter src-type setter dest-type)
-  `(lambda (src start end dest d-start)
-     (declare (type ,src-type src)
-              (type ,dest-type dest))
-     (let ((u1 0) (u2 0) (index 0) (tmp 0) (noctets 0))
-       (loop with i = start
-             while (< i end)
-             do (macrolet
-                    ((handle-error (&optional (c 'character-decoding-error))
-                       `(decoding-error #(u1 u2) :gbk src i +repl+ ',c)))
-                  (setf u1 (,getter src i))
-                  (incf i)
-                  (cond
-                    ((eq 0 (logand u1 #x80))
-                     (,setter u1 dest noctets))
-                    (t
-                     (setf u2 (,getter src i))
-                     (incf i)
-                     (setf index
-                           (block setter-block
-                             (cond
-                               ((and (<= #xB0 u1 #xF7) (<= #xA1 u2 #xFE))
-                                (+ +gbk2-offset+ (+ (* 94 (- u1 #xB0)) (- u2 #xA1))))
-
-                               ((and (<= #x81 u1 #xA0) (<= #x40 u2 #xFE))
-                                (cond ((> u2 #x7F) (setf tmp 1))
-                                      (t (setf tmp 0)))
-                                (+ +gbk3-offset+ (* 190 (- u1 #x81)) (- u2 #x40 tmp)))
-
-                               ((and (<= #xAA u1 #xFE) (<= #x40 #xA0))
-                                (cond ((> u2 #x7F) (setf tmp 1))
-                                      (t (setf tmp 0)))
-                                (+ +gbk4-offset+ (* 96 (- u1 #xAA)) (- u2 #x40 tmp)))
-
-                               ((and (<= #xA1 u1 #xA9) (<= #xA1 u2 #xFE))
-                                (+ +gbk1-offset+ (* 94 (- u1 #xA1)) (- u2 #xA1)))
-
-                               ((and (<= #xA8 u1 #xA9) (<= #x40 #xA0))
-                                (cond ((> u2 #x7F) (setf tmp 1))
-                                      (t (setf tmp 0)))
-                                (+ +gbk5-offset+ (* 96 (- u1 #xA8)) (- u2 #x40 tmp)))
-                               (t
-                                (handle-error invalid-gbk-byte)))))
-
-                     (when (>= index (length *gbk-unicode-mapping*))
-                       (handle-error invalid-gbk-byte))
-                     (,setter (char-code
-                               (elt *gbk-unicode-mapping* index))
-                              dest noctets)))
-                  (incf noctets))
-             finally (return (the fixnum (- noctets d-start)))))))
+(define-multibyte-decoder :gbk ()
+  (macrolet
+      ((handle-error (&optional (c 'character-decoding-error))
+        (declare (ignore c))
+        `(error "TODO")
+         #++`(decoding-error #(u1 u2) :gbk src i +repl+ ',c)))
+    (let ((u1 (consume-octet)) (u2 0) (index 0) (tmp 0))
+      (cond
+        ((eq 0 (logand u1 #x80)) u1)
+        (t
+         (setf u2 (consume-octet t))
+         (setf index
+               (block setter-block
+                 (cond
+                   ((and (<= #xB0 u1 #xF7) (<= #xA1 u2 #xFE))
+                    (+ +gbk2-offset+ (+ (* 94 (- u1 #xB0)) (- u2 #xA1))))
+      
+                   ((and (<= #x81 u1 #xA0) (<= #x40 u2 #xFE))
+                    (cond ((> u2 #x7F) (setf tmp 1))
+                          (t (setf tmp 0)))
+                    (+ +gbk3-offset+ (* 190 (- u1 #x81)) (- u2 #x40 tmp)))
+      
+                   ((and (<= #xAA u1 #xFE) (<= #x40 #xA0))
+                    (cond ((> u2 #x7F) (setf tmp 1))
+                          (t (setf tmp 0)))
+                    (+ +gbk4-offset+ (* 96 (- u1 #xAA)) (- u2 #x40 tmp)))
+      
+                   ((and (<= #xA1 u1 #xA9) (<= #xA1 u2 #xFE))
+                    (+ +gbk1-offset+ (* 94 (- u1 #xA1)) (- u2 #xA1)))
+      
+                   ((and (<= #xA8 u1 #xA9) (<= #x40 #xA0))
+                    (cond ((> u2 #x7F) (setf tmp 1))
+                          (t (setf tmp 0)))
+                    (+ +gbk5-offset+ (* 96 (- u1 #xA8)) (- u2 #x40 tmp)))
+                   (t
+                    (handle-error invalid-gbk-byte)))))
+      
+         (when (>= index (length *gbk-unicode-mapping*))
+           (handle-error invalid-gbk-byte))
+         (char-code (elt *gbk-unicode-mapping* index)))))))

@@ -160,10 +160,10 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
      (declare (ignore src s e dest i))
      (error "this encoder/decoder hasn't been implemented yet")))
 
-(defun make-dummy-decoder-new (sg st src-args)
-  (declare (ignore st))
-  `(named-lambda dummy-coder (,sg ,@src-args)
-    (declare (ignore ,sg ,@src-args))
+(defun make-dummy-decoder-new (streaming-src-getter streaming-src-type streaming-src-args)
+  (declare (ignore streaming-src-type))
+  `(named-lambda dummy-coder (,streaming-src-getter ,@streaming-src-args)
+    (declare (ignore ,streaming-src-getter ,@streaming-src-args))
     (error "this encoder/decoder hasn't been implemented yet")))
 
 ;;; TODO: document here
@@ -225,9 +225,9 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
                            (named-lambda decoder (,sa ,st ,da ,dt)
                              ,@body)))
 
-(defmacro define-decoder-new (encoding (sa st src-args) &body body)
+(defmacro define-decoder-new (encoding (streaming-src-getter src-type streaming-src-args) &body body)
   `(%register-mapping-part ,encoding 'decoder-new-factory
-                           (named-lambda decoder-new (,sa ,st ,src-args)
+                           (named-lambda decoder-new (,streaming-src-getter ,src-type ,streaming-src-args)
                              ,@body)))
 
 (defmacro define-octet-counter (encoding (acc type) &body body)
@@ -258,9 +258,9 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
            code-point-seq-setter
            code-point-seq-type))
 
-(defun instantiate-decoder-new (encoding am src-getter src-type src-args)
+(defun instantiate-decoder-new (encoding am streaming-src-getter streaming-src-type streaming-src-args)
   (declare (ignore encoding))
-  (funcall (decoder-new-factory am) src-getter src-type src-args))
+  (funcall (decoder-new-factory am) streaming-src-getter streaming-src-type streaming-src-args))
 
 (defun instantiate-code-point-counter (encoding am octet-seq-getter
                                        octet-seq-type)
@@ -293,7 +293,9 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
      (optimize '((speed 3) (debug 0) (compilation-speed 0)))
      octet-seq-getter octet-seq-setter octet-seq-type
      code-point-seq-getter code-point-seq-setter code-point-seq-type
-     src-args
+     streaming-src-getter
+     streaming-src-type
+     streaming-src-args
      (instantiate-decoders t))
      (declare (ignore optimize))
   `(let ((ht (make-hash-table :test 'eq)))
@@ -327,9 +329,9 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
                               ,(instantiate-code-point-counter
                                 encoding am octet-seq-getter octet-seq-type))
                         (setf (decoder-new cm) ,(instantiate-decoder-new encoding am
-                                                                                  octet-seq-getter
-                                                                                  octet-seq-type
-                                                                                  src-args))))
+                                                                                  streaming-src-getter
+                                                                                  streaming-src-type
+                                                                                  streaming-src-args))))
                   (setf (octet-counter cm)
                         ,(instantiate-octet-counter encoding am
                                                     code-point-seq-getter
@@ -412,7 +414,7 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
 (defmacro define-unibyte-decoder (encoding (octet) &body body)
   (with-unique-names (s-getter s-type d-setter d-type
                       src start end dest d-start i di
-                      src-args)
+                      streaming-src-getter streaming-src-args)
     `(progn
       (define-decoder ,encoding (,s-getter ,s-type ,d-setter ,d-type)
         `(named-lambda ,',(symbolicate encoding '#:-unibyte-decoder)
@@ -434,9 +436,9 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
                       (block ,',encoding ,@',body)))
                   ,',dest ,',di)
                  finally (return (the fixnum (-  ,',di ,',d-start))))))
-      (define-decoder-new ,encoding (,s-getter ,s-type ,src-args)
+      (define-decoder-new ,encoding (,streaming-src-getter ,s-type ,streaming-src-args)
         `(named-lambda ,',(symbolicate encoding '#:-unibyte-decoder-new)
-           (,',src ,@,src-args)
+           (,',src ,@,streaming-src-args)
            (declare (type ,,s-type ,',src))
            (macrolet
               ;; this should probably be a function...
@@ -444,7 +446,7 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
                  `(decoding-error
                    (vector ,',',octet) ,',',encoding ,',',src nil #|todo expecting pos|# #++,',',i
                    +default-substitution-code-point+ ,c)))
-             (let ((,',octet (or (,,s-getter ,',src ,@,src-args)
+             (let ((,',octet (or (,,streaming-src-getter ,',src ,@,streaming-src-args)
                                   (return-from ,',(symbolicate encoding '#:-unibyte-decoder-new) nil))))
                (declare (type ub8 ,',octet))
                (block ,',encoding ,@',body))))))))
@@ -452,7 +454,7 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
 (defmacro define-multibyte-decoder (encoding () &body body)
   (with-unique-names (s-getter s-type d-setter d-type
                       src start end dest d-start i di
-                      src-args)
+                      streaming-src-getter streaming-src-type streaming-src-args)
     `(progn
       (define-decoder ,encoding (,s-getter ,s-type ,d-setter ,d-type)
         `(named-lambda ,',(symbolicate encoding '#:-multibyte-decoder)
@@ -463,7 +465,6 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
            (loop with ,',i fixnum = ,',start
                  for ,',di fixnum from ,',d-start do
                  (when (<= ,',end ,',i) (loop-finish))
-                 (print ,',i)
                  (,,d-setter
                   (macrolet
                       ;; this should probably be a function...
@@ -481,10 +482,10 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
                       (block ,',encoding ,@',body))
                   ,',dest ,',di)
                  finally (return (the fixnum (-  ,',di ,',d-start))))))
-      (define-decoder-new ,encoding (,s-getter ,s-type ,src-args)
+      (define-decoder-new ,encoding (,streaming-src-getter ,streaming-src-type ,streaming-src-args)
         `(named-lambda ,',(symbolicate encoding '#:-multibyte-decoder-new)
-           (,',src ,@,src-args)
-           (declare (type ,,s-type ,',src))
+           (,',src ,@,streaming-src-args)
+           (declare (type ,,streaming-src-type ,',src))
            (macrolet
               ;; this should probably be a function...
               ((handle-error (&optional (c ''character-decoding-error))
@@ -495,8 +496,8 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
                    +default-substitution-code-point+ ,c))
                 (consume-octet (&optional errorp)
                   (if errorp
-                    `(or (,',,s-getter ,',',src ,',@,src-args) (error "EOF TBD"))
-                    `(,',,s-getter ,',',src ,',@,src-args))))
+                    `(or (,',,streaming-src-getter ,',',src ,,@,streaming-src-args) (error "EOF TBD"))
+                    `(or (,',,streaming-src-getter ,',',src ,,@,streaming-src-args) (return-from ,',,encoding nil)))))
              (block ,',encoding ,@',body)))))))
 
 ;;;; Error Conditions

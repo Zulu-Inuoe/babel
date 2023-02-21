@@ -163,7 +163,7 @@ in 2 to 4 bytes."
            finally (return (the fixnum (- di d-start))))))
 
 (define-multibyte-decoder :utf-8 ()
-   (let ((u1 (or (consume-octet) (return-from :utf-8 nil)))
+   (let ((u1 (consume-octet))
          (u2 0) (u3 0) (u4 0) (u5 0) (u6 0))
      (declare (type ub8 u1 u2 u3 u4 u5 u6))
      (macrolet ((handle-error (n &optional (c 'character-decoding-error))
