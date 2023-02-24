@@ -237,6 +237,38 @@ shouldn't attempt to modify V."
 (defparameter *streaming-decoder-mappings*
   (instantiate-streaming-mappings))
 
+
+(defmacro with-vector-decoder ((decoder vector &key (encoding *default-character-encoding*) (start 0) (end nil)) &body body)
+  (let ((vector-sym (gensym (string 'vector)))
+        (decoder-sym (gensym (string 'decoder)))
+        (i-sym (gensym (string 'i)))
+        (end-sym (gensym (string 'end)))
+        (buffer-sym (gensym (string 'buffer)))
+        (consume-byte-sym (gensym (string 'consume-byte))))
+  `(let* ((,vector-sym ,vector)
+          (,decoder-sym (lookup-mapping *streaming-decoder-mappings* ,encoding))
+          (,i-sym (or ,start 0))
+          (,end-sym (or ,end (length ,vector-sym)))
+          (,buffer-sym (make-array 4 :element-type '(integer 0) :fill-pointer 0 :adjustable t))
+          (,consume-byte-sym
+                        (lambda ()
+                          (if (< ,i-sym ,end-sym)
+                            (prog1 (aref ,vector-sym ,i-sym) (incf ,i-sym))
+                            (error "EOF")))))
+    (macrolet ((,decoder ()
+                `(if (zerop (length ,',buffer-sym))
+                  (when (< ,',i-sym ,',end-sym)
+                    (code-char (funcall ,',decoder-sym (prog1 (aref ,',vector-sym ,',i-sym) (incf ,',i-sym)) ,',consume-byte-sym ,',buffer-sym)))
+                  (code-char (vector-pop ,',buffer-sym)))))
+      ,@body))))
+
+(defun octets-to-string-new2 (vector &key (start 0) end (encoding *default-character-encoding*))
+  (with-vector-decoder (decoder vector :encoding encoding :start start :end end)
+    (loop :with string := (make-array 128 :element-type 'character :fill-pointer 0)
+          :for c := (decoder) :while c
+          :do (vector-push-extend c string)
+          :finally (return (coerce string 'simple-string)))))
+
 (defun octets-to-string-new (vector &key (start 0) end
                               (errorp (not *suppress-character-coding-errors*))
                               (encoding *default-character-encoding*))
@@ -255,8 +287,9 @@ shouldn't attempt to modify V."
           :finally (return (coerce string 'simple-string)))))
 
 (defun new-test (&key (str "Hello, world!") (encoding :utf-8))
-  (values (babel::octets-to-string-new (if (stringp str) (babel:string-to-octets str :encoding encoding) (coerce str '(simple-array (unsigned-byte 8) (*)))) :encoding encoding)
-          (babel::octets-to-string     (if (stringp str) (babel:string-to-octets str :encoding encoding) (coerce str '(simple-array (unsigned-byte 8) (*)))) :encoding encoding)))
+  (values (babel::octets-to-string-new2 (if (stringp str) (babel:string-to-octets str :encoding encoding) (coerce str '(simple-array (unsigned-byte 8) (*)))) :encoding encoding)
+          (babel::octets-to-string-new  (if (stringp str) (babel:string-to-octets str :encoding encoding) (coerce str '(simple-array (unsigned-byte 8) (*)))) :encoding encoding)
+          (babel::octets-to-string      (if (stringp str) (babel:string-to-octets str :encoding encoding) (coerce str '(simple-array (unsigned-byte 8) (*)))) :encoding encoding)))
 
 (defun bom-vector (encoding use-bom)
   (check-type use-bom (member :default t nil))
