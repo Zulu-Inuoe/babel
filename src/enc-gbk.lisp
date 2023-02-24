@@ -131,17 +131,17 @@ Chinese characters, used in the People's Republic of China."
                          (incf noctets 2)))))
                finally (return (the fixnum (- noctets d-start))))))))
 
-(define-multibyte-decoder :gbk ()
+(define-multibyte-decoder :gbk (u1 consume-octet)
   (macrolet
       ((handle-error (&optional (c 'character-decoding-error))
         (declare (ignore c))
         `(error "TODO")
          #++`(decoding-error #(u1 u2) :gbk src i +repl+ ',c)))
-    (let ((u1 (consume-octet)) (u2 0) (index 0) (tmp 0))
+    (let ((u2 0) (index 0) (tmp 0))
       (cond
         ((eq 0 (logand u1 #x80)) u1)
         (t
-         (setf u2 (consume-octet t))
+         (setf u2 (consume-octet))
          (setf index
                (block setter-block
                  (cond

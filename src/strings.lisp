@@ -107,38 +107,6 @@ are less than UNICODE-CHAR-CODE-LIMIT."
   "Alias for (VECTOR UNICODE-CHAR *)."
   '(vector unicode-char *))
 
-(defclass decoder ()
-  ((%decode-function
-    :type function
-    :initarg :decode-function)))
-
-(defclass vector-decoder (decoder)
-  ((%vector
-    :type (simple-array (unsigned-byte 8) (*))
-    :initarg :vector)
-   (%index
-    :type fixnum
-    :initarg :index)
-   (%end
-    :type fixnum
-    :initarg :end)))
-
-(defun vector-decoder-next (decoder)
-  (with-slots (%vector %index %end) decoder
-    (let ((index %index))
-      (when (< index %end)
-        (prog1 (aref %vector %index)
-          (setf %index (1+ index)))))))
-
-(defclass stream-decoder (decoder)
-  ((%stream
-    :type stream
-    :initarg :stream)))
-
-(defun stream-decoder-next (decoder)
-  (with-slots (%stream) decoder
-    (read-byte %stream nil nil)))
-
 (defparameter *string-vector-mappings*
   (instantiate-concrete-mappings
    ;; :optimize ((speed 3) (safety 0) (debug 0) (compilation-speed 0))
@@ -147,10 +115,7 @@ are less than UNICODE-CHAR-CODE-LIMIT."
    :octet-seq-type (simple-array (unsigned-byte 8) (*))
    :code-point-seq-setter string-set
    :code-point-seq-getter string-get
-   :code-point-seq-type simple-unicode-string
-   :streaming-src-getter vector-decoder-next
-   :streaming-src-type vector-decoder
-   :streaming-src-args ()))
+   :code-point-seq-type simple-unicode-string))
 
 #+sbcl
 (defparameter *simple-base-string-vector-mappings*
@@ -162,10 +127,7 @@ are less than UNICODE-CHAR-CODE-LIMIT."
    :octet-seq-type (simple-array (unsigned-byte 8) (*))
    :code-point-seq-setter string-set
    :code-point-seq-getter string-get
-   :code-point-seq-type simple-base-string
-   :streaming-src-getter vector-decoder-next
-   :streaming-src-type vector-decoder
-   :streaming-src-args ()))
+   :code-point-seq-type simple-base-string))
 
 ;;; Do we want a more a specific error condition here?
 (defun check-vector-bounds (vector start end)
@@ -272,30 +234,29 @@ shouldn't attempt to modify V."
           (funcall (decoder mapping) vector start new-end string 0)
           string)))))
 
-(defun make-vector-decoder (vector &key (encoding *default-character-encoding*) (start 0) end)
-  (let ((start (or start 0))
-        (end (or end (length vector)))
-        (mapping (lookup-mapping *string-vector-mappings* encoding)))
-    (make-instance 'vector-decoder :decode-function (decoder-new mapping) :vector vector :index start :end end)))
-
-(defun decoder-next (decoder)
-  (funcall (slot-value decoder '%decode-function) decoder))
+(defparameter *streaming-decoder-mappings*
+  (instantiate-streaming-mappings))
 
 (defun octets-to-string-new (vector &key (start 0) end
                               (errorp (not *suppress-character-coding-errors*))
                               (encoding *default-character-encoding*))
   (let* ((*suppress-character-coding-errors* (not errorp))
-         (decoder (make-vector-decoder vector :encoding encoding :start start :end end))
-         (string (make-array 128 :element-type 'unicode-char :adjustable t :fill-pointer 0)))
-    (loop :for i :from (or start 0) :below (or end (length vector))
-          :for c := (decoder-next decoder)
-          :while c
-          :do (vector-push-extend (code-char c) string)
+         (decoder (lookup-mapping *streaming-decoder-mappings* encoding))
+         (string (make-array 128 :element-type 'unicode-char :adjustable t :fill-pointer 0))
+         (buffer (make-array 4 :element-type  'unicode-char :adjustable t :fill-pointer 0)))
+    (loop :with i = (or start 0)
+          :with end := (or end (length vector))
+          :do
+            (when (<= end i) (loop-finish))
+            (let ((c (if (zerop (length buffer))
+                       (funcall decoder (prog1 (aref vector i) (incf i)) (lambda () (if (< i end) (prog1 (aref vector i) (incf i)) (error "EOF"))) buffer)
+                       (vector-pop buffer))))
+              (vector-push-extend (code-char c) string))
           :finally (return (coerce string 'simple-string)))))
 
 (defun new-test (&key (str "Hello, world!") (encoding :utf-8))
-  (values (babel::octets-to-string-new (babel:string-to-octets str :encoding encoding) :encoding encoding)
-          (babel::octets-to-string (babel:string-to-octets str :encoding encoding) :encoding encoding)))
+  (values (babel::octets-to-string-new (if (stringp str) (babel:string-to-octets str :encoding encoding) (coerce str '(simple-array (unsigned-byte 8) (*)))) :encoding encoding)
+          (babel::octets-to-string     (if (stringp str) (babel:string-to-octets str :encoding encoding) (coerce str '(simple-array (unsigned-byte 8) (*)))) :encoding encoding)))
 
 (defun bom-vector (encoding use-bom)
   (check-type use-bom (member :default t nil))

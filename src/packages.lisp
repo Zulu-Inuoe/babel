@@ -48,6 +48,7 @@
    #:ambiguous-encoding-p
    ;; concrete mappings
    #:instantiate-concrete-mappings
+   #:instantiate-streaming-mappings
    #:encoder
    #:decoder
    #:octet-counter

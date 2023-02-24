@@ -160,11 +160,11 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
      (declare (ignore src s e dest i))
      (error "this encoder/decoder hasn't been implemented yet")))
 
-(defun make-dummy-decoder-new (streaming-src-getter streaming-src-type streaming-src-args)
-  (declare (ignore streaming-src-type))
-  `(named-lambda dummy-coder (,streaming-src-getter ,@streaming-src-args)
-    (declare (ignore ,streaming-src-getter ,@streaming-src-args))
-    (error "this encoder/decoder hasn't been implemented yet")))
+(defun dummy-streaming-decoder (octet consume-octet buffer)
+  (declare (ignore octet))
+  (declare (ignore consume-octet))
+  (declare (ignore buffer))
+  (error "this encoder/decoder hasn't been implemented yet"))
 
 ;;; TODO: document here
 ;;;
@@ -176,7 +176,7 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
 (defclass abstract-mapping ()
   ((encoder-factory :accessor encoder-factory :initform 'make-dummy-coder)
    (decoder-factory :accessor decoder-factory :initform 'make-dummy-coder)
-   (decoder-new-factory :accessor decoder-new-factory :initform 'make-dummy-decoder-new)
+   (streaming-decoder :accessor streaming-decoder :initform 'dummy-streaming-decoder)
    (octet-counter-factory :accessor octet-counter-factory
                           :initform 'make-fixed-width-counter)
    (code-point-counter-factory :accessor code-point-counter-factory
@@ -194,7 +194,7 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
 (defclass concrete-mapping ()
   ((encoder :accessor encoder)
    (decoder :accessor decoder)
-   (decoder-new :accessor decoder-new)
+   (streaming-decoder :accessor streaming-decoder)
    (octet-counter :accessor octet-counter)
    (code-point-counter :accessor code-point-counter)))
 
@@ -225,11 +225,6 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
                            (named-lambda decoder (,sa ,st ,da ,dt)
                              ,@body)))
 
-(defmacro define-decoder-new (encoding (streaming-src-getter src-type streaming-src-args) &body body)
-  `(%register-mapping-part ,encoding 'decoder-new-factory
-                           (named-lambda decoder-new (,streaming-src-getter ,src-type ,streaming-src-args)
-                             ,@body)))
-
 (defmacro define-octet-counter (encoding (acc type) &body body)
   `(%register-mapping-part ,encoding 'octet-counter-factory
                            (named-lambda octet-counter-factory (,acc ,type)
@@ -239,6 +234,19 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
   `(%register-mapping-part ,encoding 'code-point-counter-factory
                            (named-lambda code-point-counter (,acc ,type)
                              ,@body)))
+
+(defmacro define-streaming-decoder (encoding (u1 &key (consume-octet nil consume-octet-p) (buffer-var nil buffer-var-p)) &body body)
+  (setf consume-octet (or consume-octet (gensym (string 'consume-octet))))
+  (setf buffer-var (or buffer-var (gensym (string 'buffer-var))))
+  (let ((name (symbolicate encoding '-streaming-decoder)))
+    (print name)
+    `(progn
+      (defun ,name (,u1 ,consume-octet ,buffer-var)
+        (declare (type ub8 ,u1))
+        ,@(unless consume-octet-p `((declare (ignore ,consume-octet))))
+        ,@(unless buffer-var-p `((declare (ignore ,buffer-var))))
+        (macrolet ((,consume-octet () `(funcall ,',consume-octet))) ,@body))
+      (%register-mapping-part ,encoding 'streaming-decoder ',name))))
 
 (defun instantiate-encoder (encoding am octet-seq-getter octet-seq-type
                             code-point-seq-setter code-point-seq-type)
@@ -258,9 +266,9 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
            code-point-seq-setter
            code-point-seq-type))
 
-(defun instantiate-decoder-new (encoding am streaming-src-getter streaming-src-type streaming-src-args)
+(defun instantiate-streaming-decoder (encoding am)
   (declare (ignore encoding))
-  (funcall (decoder-new-factory am) streaming-src-getter streaming-src-type streaming-src-args))
+  (streaming-decoder am))
 
 (defun instantiate-code-point-counter (encoding am octet-seq-getter
                                        octet-seq-type)
@@ -293,13 +301,9 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
      (optimize '((speed 3) (debug 0) (compilation-speed 0)))
      octet-seq-getter octet-seq-setter octet-seq-type
      code-point-seq-getter code-point-seq-setter code-point-seq-type
-     streaming-src-getter
-     streaming-src-type
-     streaming-src-args
      (instantiate-decoders t))
-     (declare (ignore optimize))
   `(let ((ht (make-hash-table :test 'eq)))
-     (declare #++(optimize ,@optimize)
+     (declare (optimize ,@optimize)
               #+sbcl (sb-ext:muffle-conditions sb-ext:compiler-note))
      (flet ((notice-mapping (encoding-name cm)
               (let* ((encoding (get-character-encoding encoding-name))
@@ -327,16 +331,29 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
                                                     code-point-seq-type))
                         (setf (code-point-counter cm)
                               ,(instantiate-code-point-counter
-                                encoding am octet-seq-getter octet-seq-type))
-                        (setf (decoder-new cm) ,(instantiate-decoder-new encoding am
-                                                                                  streaming-src-getter
-                                                                                  streaming-src-type
-                                                                                  streaming-src-args))))
+                                encoding am octet-seq-getter octet-seq-type))))
                   (setf (octet-counter cm)
                         ,(instantiate-octet-counter encoding am
                                                     code-point-seq-getter
                                                     code-point-seq-type))
                   (notice-mapping ,encoding-name cm))))
+     ht))
+
+(defmacro instantiate-streaming-mappings (&key (encodings (hash-table-keys *abstract-mappings*))
+                                               (optimize '((speed 3) (debug 0) (compilation-speed 0))))
+  `(let ((ht (make-hash-table :test 'eq)))
+     (declare (optimize ,@optimize)
+              #+sbcl (sb-ext:muffle-conditions sb-ext:compiler-note))
+     (flet ((notice-mapping (encoding-name cm)
+              (let* ((encoding (get-character-encoding encoding-name))
+                     (aliases (enc-aliases encoding)))
+                (dolist (kw (cons (enc-name encoding) aliases))
+                  (setf (gethash kw ht) cm)))))
+       ,@(loop for encoding-name in encodings
+               for encoding = (get-character-encoding encoding-name)
+               for am = (gethash encoding-name *abstract-mappings*)
+               collect
+               `(notice-mapping ,encoding-name ',(instantiate-streaming-decoder encoding am))))
      ht))
 
 ;;; debugging stuff
@@ -411,10 +428,10 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
                 finally (return (the fixnum (- ,',di ,',d-start))))))))
 
 ;;; The decoder version of the above macro.
-(defmacro define-unibyte-decoder (encoding (octet) &body body)
+(defmacro define-unibyte-decoder (encoding (octet &key (buffer-var nil buffer-var-p)) &body body)
+  (setf buffer-var (or buffer-var (gensym (string '#:buffer))))
   (with-unique-names (s-getter s-type d-setter d-type
-                      src start end dest d-start i di
-                      streaming-src-getter streaming-src-args)
+                      src start end dest d-start i di)
     `(progn
       (define-decoder ,encoding (,s-getter ,s-type ,d-setter ,d-type)
         `(named-lambda ,',(symbolicate encoding '#:-unibyte-decoder)
@@ -422,39 +439,43 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
            (declare (type ,,s-type ,',src)
                     (type ,,d-type ,',dest)
                     (fixnum ,',start ,',end ,',d-start))
-           (loop for ,',i fixnum from ,',start below ,',end
-                 and ,',di fixnum from ,',d-start do
+           (loop ,,@(when buffer-var-p
+                      (list 'with buffer-var '= (make-array 4 :element-type 'character :fill-pointer 0 :adjustable t)))
+                 with ,',i fixnum = ,',start
+                 for ,',di fixnum from ,',d-start do
+                 (when (<= ,',end ,',i) (loop-finish))
                  (,,d-setter
-                  (macrolet
-                      ;; this should probably be a function...
-                      ((handle-error (&optional (c ''character-decoding-error))
-                         `(decoding-error
-                           (vector ,',',octet) ,',',encoding ,',',src ,',',i
-                           +default-substitution-code-point+ ,c)))
-                    (let ((,',octet (,,s-getter ,',src ,',i)))
-                      (declare (type ub8 ,',octet))
-                      (block ,',encoding ,@',body)))
+                  ,,(if buffer-var-p
+                      ``(if (zerop (length ,buffer-var-p))
+                         #1=(macrolet
+                             ;; this should probably be a function...
+                             ((handle-error (&optional (c ''character-decoding-error))
+                                `(decoding-error
+                                  (vector ,',',octet) ,',',encoding ,',',src ,',',i
+                                  +default-substitution-code-point+ ,c)))
+                           (let ((,',octet (,,s-getter ,',src ,',i)))
+                             (declare (type ub8 ,',octet))
+                             (incf ,',i)
+                             (block ,',encoding ,@',body)))
+                         (vector-pop ,buffer-var))
+                      ``#1#)
                   ,',dest ,',di)
                  finally (return (the fixnum (-  ,',di ,',d-start))))))
-      (define-decoder-new ,encoding (,streaming-src-getter ,s-type ,streaming-src-args)
-        `(named-lambda ,',(symbolicate encoding '#:-unibyte-decoder-new)
-           (,',src ,@,streaming-src-args)
-           (declare (type ,,s-type ,',src))
-           (macrolet
-              ;; this should probably be a function...
-              ((handle-error (&optional (c ''character-decoding-error))
-                 `(decoding-error
-                   (vector ,',',octet) ,',',encoding ,',',src nil #|todo expecting pos|# #++,',',i
-                   +default-substitution-code-point+ ,c)))
-             (let ((,',octet (or (,,streaming-src-getter ,',src ,@,streaming-src-args)
-                                  (return-from ,',(symbolicate encoding '#:-unibyte-decoder-new) nil))))
-               (declare (type ub8 ,',octet))
-               (block ,',encoding ,@',body))))))))
+      (define-streaming-decoder ,encoding (,octet ,@(when buffer-var-p `(:buffer-var ,buffer-var)))
+        (macrolet
+           ;; this should probably be a function...
+           ((handle-error (&optional (c 'character-decoding-error))
+              (declare (ignore c))
+              `(error "TBD")
+              #++`(decoding-error
+                (vector ,',octet) ,',encoding nil #|todo expecting pos|# #++,',',i
+                +default-substitution-code-point+ ,c)))
+          (block ,encoding ,@body))))))
 
-(defmacro define-multibyte-decoder (encoding () &body body)
+(defmacro define-multibyte-decoder (encoding (u1 consume-octet1 &key (buffer-var nil buffer-var-p)) &body body)
+  (setf buffer-var (or buffer-var (gensym (string 'buffer-var))))
   (with-unique-names (s-getter s-type d-setter d-type
-                      src start end dest d-start i di
-                      streaming-src-getter streaming-src-type streaming-src-args)
+                      src start end dest d-start i di)
     `(progn
       (define-decoder ,encoding (,s-getter ,s-type ,d-setter ,d-type)
         `(named-lambda ,',(symbolicate encoding '#:-multibyte-decoder)
@@ -462,43 +483,46 @@ a CHARACTER-ENCONDING object, it is returned unmodified."
            (declare (type ,,s-type ,',src)
                     (type ,,d-type ,',dest)
                     (fixnum ,',start ,',end ,',d-start))
-           (loop with ,',i fixnum = ,',start
+           (loop ,@(when ,buffer-var-p
+                      `(with ,',buffer-var = (make-array 4 :element-type 'integer :fill-pointer 0 :adjustable t)))
+                 with ,',i fixnum = ,',start
                  for ,',di fixnum from ,',d-start do
                  (when (<= ,',end ,',i) (loop-finish))
-                 (,,d-setter
-                  (macrolet
-                      ;; this should probably be a function...
-                      ((handle-error (&optional (c ''character-decoding-error))
-                        (declare (ignore c))
-                        `(error "TBD")
-                        #++
-                         `(decoding-error
-                           (vector ,',',octet) ,',',encoding ,',',src ,',',i
-                           +default-substitution-code-point+ ,c))
-                       (consume-octet (&optional errorp)
-                        (if errorp
-                          `(or (and (< ,',',i ,',',end) (prog1 (,',,s-getter ,',',src ,',',i) (incf ,',',i))) (error "EOF TBD"))
-                          `(and (< ,',',i ,',',end)     (prog1 (,',,s-getter ,',',src ,',',i) (incf ,',',i))))))
-                      (block ,',encoding ,@',body))
-                  ,',dest ,',di)
+                 (macrolet
+                          ;; this should probably be a function...
+                          ((handle-error (&optional (c ''character-decoding-error))
+                            (declare (ignore c))
+                            `(error "TBD")
+                            #++
+                            `(decoding-error
+                              (vector ,',',octet) ,',',encoding ,',',src ,',',i
+                              +default-substitution-code-point+ ,c))
+                          (,',consume-octet1 ()
+                            `(if (< ,',',i ,',',end)
+                                (prog1 (,',,s-getter ,',',src ,',',i)
+                                  (incf ,',',i))
+                                (error "EOF TBD"))))
+                   (,,d-setter
+                    ,',(if buffer-var-p
+                      `(if (zerop (length ,buffer-var))
+                        (let ((,u1 (,consume-octet1)))
+                          (block ,encoding ,@body))
+                        (vector-pop ,buffer-var))
+                      `(let ((,u1 (,consume-octet1)))
+                          (block ,encoding ,@body)))
+                    ,',dest ,',di))
                  finally (return (the fixnum (-  ,',di ,',d-start))))))
-      (define-decoder-new ,encoding (,streaming-src-getter ,streaming-src-type ,streaming-src-args)
-        `(named-lambda ,',(symbolicate encoding '#:-multibyte-decoder-new)
-           (,',src ,@,streaming-src-args)
-           (declare (type ,,streaming-src-type ,',src))
-           (macrolet
-              ;; this should probably be a function...
-              ((handle-error (&optional (c ''character-decoding-error))
-                  (declare (ignore c))
-                 `(error "TBD")
-                 #++`(decoding-error
-                   (vector ,',',octet) ,',',encoding ,',',src nil #|todo expecting pos|# #++,',',i
-                   +default-substitution-code-point+ ,c))
-                (consume-octet (&optional errorp)
-                  (if errorp
-                    `(or (,',,streaming-src-getter ,',',src ,,@,streaming-src-args) (error "EOF TBD"))
-                    `(or (,',,streaming-src-getter ,',',src ,,@,streaming-src-args) (return-from ,',,encoding nil)))))
-             (block ,',encoding ,@',body)))))))
+      (define-streaming-decoder ,encoding (,u1 :consume-octet ,consume-octet1
+                                               ,@(when buffer-var-p `(:buffer-var ,buffer-var)))
+        (macrolet
+            ;; this should probably be a function...
+          ((handle-error (&optional (c ''character-decoding-error))
+              (declare (ignore c))
+              `(error "TBD")
+              #++`(decoding-error
+                (vector ,',',octet) ,',',encoding ,',',src nil #|todo expecting pos|# #++,',',i
+                +default-substitution-code-point+ ,c)))
+            (block ,encoding ,@body))))))
 
 ;;;; Error Conditions
 ;;;

@@ -572,10 +572,9 @@ in 2 to 3 bytes."
            finally (return (the fixnum (- di d-start))))))
 
 
-(define-multibyte-decoder :eucjp ()
-  (let ((u1 (consume-octet))
-        (u2 0))
-    (declare (type ub8 u1 u2))
+(define-multibyte-decoder :eucjp (u1 consume-octet)
+  (let ((u2 0))
+    (declare (type ub8 u2))
     (macrolet
         ((handle-error (n &optional (c 'character-decoding-error))
           (declare (ignore n c))
@@ -590,15 +589,15 @@ in 2 to 3 bytes."
      (cond
        ;; 3 octets
        ((= u1 #x8f)
-        (setf u2 (consume-octet t))
+        (setf u2 (consume-octet))
         (eucjp-to-ucs (logior #x8f0000
                               (f-ash u2 8)
-                              (consume-octet t))))
+                              (consume-octet))))
        ;; 2 octets
        ((or (= u1 #x8e)
             (< #xa0 u1 #xff))
         (eucjp-to-ucs (logior (f-ash u1 8)
-                              (consume-octet t))))
+                              (consume-octet))))
        ;; 1 octet
        (t
         (eucjp-to-ucs u1))))))
@@ -695,9 +694,8 @@ in 2 bytes."
                    ))
            finally (return (the fixnum (- di d-start))))))
 
-(define-multibyte-decoder :cp932 ()
-  (let ((u1 (consume-octet))
-        (u2 0))
+(define-multibyte-decoder :cp932 (u1 consume-octet)
+  (let ((u2 0))
     (declare (type ub8 u1 u2))
     (macrolet
         ((handle-error (n &optional (c 'character-decoding-error))
@@ -714,7 +712,7 @@ in 2 bytes."
         ;; 2 octets
         ((or (<= #x81 u1 #x9f)
              (<= #xe0 u1 #xfc))
-         (setf u2 (consume-octet t))
+         (setf u2 (consume-octet))
          (cp932-to-ucs (logior (f-ash u1 8)
                                u2)))
         ;; 1 octet
